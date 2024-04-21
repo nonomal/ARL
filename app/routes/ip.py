@@ -21,7 +21,8 @@ base_search_fields = {
     "ip_type": fields.String(description="IP类型，公网(PUBLIC)和内网(PRIVATE)"),
     "cdn_name": fields.String(description="CDN 厂商名称"),
     "geo_asn.number": fields.Integer(description="AS number"),
-    "geo_asn.organization": fields.String(description="AS organization")
+    "geo_asn.organization": fields.String(description="AS organization"),
+    "geo_city.region_name": fields.String(description="GEO region_name")
 }
 
 base_search_fields.update(base_query_fields)
@@ -55,6 +56,38 @@ class ARLIPExport(ARLResource):
         """
         args = self.parser.parse_args()
         response = self.send_export_file(args=args, _type="ip")
+
+        return response
+
+
+@ns.route('/export_domain/')
+class ARLIPExportDomain(ARLResource):
+    parser = get_arl_parser(base_search_fields, location='args')
+
+    @auth
+    @ns.expect(parser)
+    def get(self):
+        """
+        从 IP 中导出域名
+        """
+        args = self.parser.parse_args()
+        response = self.send_export_file_attr(args=args, collection="ip", field="domain")
+
+        return response
+
+
+@ns.route('/export_ip/')
+class ARLIPExportIp(ARLResource):
+    parser = get_arl_parser(base_search_fields, location='args')
+
+    @auth
+    @ns.expect(parser)
+    def get(self):
+        """
+        从 IP 中导出 IP
+        """
+        args = self.parser.parse_args()
+        response = self.send_export_file_attr(args=args, collection="ip", field="ip")
 
         return response
 

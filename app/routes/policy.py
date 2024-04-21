@@ -4,6 +4,8 @@ from . import base_query_fields, ARLResource, get_arl_parser
 from app.modules import ErrorMsg
 from app import utils
 from bson import ObjectId
+from flask_restx.fields import Nested, String, Boolean, List
+from flask_restx.model import Model
 
 ns = Namespace('policy', description="策略信息")
 
@@ -54,7 +56,8 @@ ip_config_fields = ns.model('ipConfig', {
     "host_timeout_type": fields.String(description="主机超时时间类别（default|custom）", default="default"),
     "host_timeout": fields.Integer(description="主机超时时间(s)", default=900),
     "port_parallelism": fields.Integer(description="探测报文并行度", default=32),
-    "port_min_rate": fields.Integer(description="最少发包速率", default=60)
+    "port_min_rate": fields.Integer(description="最少发包速率", default=60),
+    "exclude_ports": fields.String(description="排除扫描端口", default=""),
 })
 
 '''站点相关配置选项'''
@@ -64,35 +67,34 @@ site_config_fields = ns.model('siteConfig', {
     "search_engines": fields.Boolean(description="搜索引擎调用", default=False),
     "site_spider": fields.Boolean(description="站点爬虫", default=False),
     "nuclei_scan": fields.Boolean(description="nuclei 扫描", default=False),
+    "web_info_hunter": fields.Boolean(example=False, default=False, description="web JS 中的信息收集"),
 })
-
 
 '''资产组关联配置'''
 scope_config_fields = ns.model('scopeConfig', {
     "scope_id": fields.String(description="资产分组 ID", default=""),
 })
 
-
-add_policy_fields = ns.model('addPolicy',  {
+add_policy_fields = ns.model('addPolicy', {
     "name": fields.String(required=True, description="策略名称"),
     "desc": fields.String(description="策略描述信息"),
     "policy": fields.Nested(ns.model("policy", {
-            "domain_config": fields.Nested(domain_config_fields),
-            "ip_config": fields.Nested(ip_config_fields),
-            "site_config": fields.Nested(site_config_fields),
-            "file_leak": fields.Boolean(description="文件泄漏", default=False),
-            "npoc_service_detection": fields.Boolean(description="服务识别（纯python实现）", default=False),
-            "poc_config": fields.List(fields.Nested(ns.model('pocConfig', {
-                "plugin_name": fields.String(description="poc 插件名称ID", default=False),
-                "enable": fields.Boolean(description="是否启用", default=True)
-            }))),
-            "brute_config": fields.List(fields.Nested(ns.model('bruteConfig', {
-                "plugin_name": fields.String(description="poc 插件名称ID", default=False),
-                "enable": fields.Boolean(description="是否启用", default=True)
-            }))),
-            "scope_config": fields.Nested(scope_config_fields)
-        }, required=True)
-    )
+        "domain_config": fields.Nested(domain_config_fields),
+        "ip_config": fields.Nested(ip_config_fields),
+        "site_config": fields.Nested(site_config_fields),
+        "file_leak": fields.Boolean(description="文件泄漏", default=False),
+        "npoc_service_detection": fields.Boolean(description="服务识别（纯python实现）", default=False),
+        "poc_config": fields.List(fields.Nested(ns.model('pocConfig', {
+            "plugin_name": fields.String(description="poc 插件名称ID", default=False),
+            "enable": fields.Boolean(description="是否启用", default=True)
+        }))),
+        "brute_config": fields.List(fields.Nested(ns.model('bruteConfig', {
+            "plugin_name": fields.String(description="poc 插件名称ID", default=False),
+            "enable": fields.Boolean(description="是否启用", default=True)
+        }))),
+        "scope_config": fields.Nested(scope_config_fields)
+    }, required=True)
+                            )
 })
 
 
@@ -122,6 +124,11 @@ class AddARLPolicy(ARLResource):
                 return utils.build_ret(ErrorMsg.PortCustomInvalid, {"port_custom": port_list})
 
             ip_config["port_custom"] = ",".join(port_list)
+
+        exclude_ports = ip_config.get("exclude_ports", "")
+        if exclude_ports:
+            if not utils.is_valid_exclude_ports(exclude_ports):
+                return utils.build_ret(ErrorMsg.ExcludePortsInvalid, {"exclude_ports": exclude_ports})
 
         ip_config = self._update_arg(ip_config, ip_config_fields)
 
@@ -208,7 +215,7 @@ def get_dict_default_from_module(module):
     return ret
 
 
-delete_policy_fields = ns.model('DeletePolicy',  {
+delete_policy_fields = ns.model('DeletePolicy', {
     'policy_id': fields.List(fields.String(required=True, description="策略ID", example="603c65316591e73dd717d176"))
 })
 
@@ -232,7 +239,7 @@ class DeletePolicy(ARLResource):
         return utils.build_ret(ErrorMsg.Success, {})
 
 
-edit_policy_fields = ns.model('editPolicy',  {
+edit_policy_fields = ns.model('editPolicy', {
     'policy_id': fields.String(required=True, description="策略ID", example="603c65316591e73dd717d176"),
     'policy_data': fields.Nested(ns.model("policyData", {}))
 })
@@ -257,7 +264,11 @@ class EditPolicy(ARLResource):
 
         if not policy_data:
             return utils.build_ret(ErrorMsg.PolicyDataIsEmpty, {})
-        item = change_dict(item, policy_data)
+
+        allow_keys = gen_model_policy_keys(add_policy_fields["policy"])
+        allow_keys.extend(["name", "desc", "policy"])
+
+        item = change_policy_dict(item, policy_data, allow_keys)
 
         poc_config = item["policy"].pop("poc_config", [])
         poc_config = _update_plugin_config(poc_config)
@@ -304,24 +315,26 @@ def _update_plugin_config(config):
     return ret
 
 
-def change_dict(old_data, new_data):
+# change_policy_dict, 用于修改策略，支持新的字段被修改
+def change_policy_dict(old_data, new_data, allow_keys):
     if not isinstance(new_data, dict):
         return
 
-    for key in old_data:
-        if key in ["_id", "update_date"]:
+    for key in new_data:
+        if key not in allow_keys:
             continue
 
-        next_old_data = old_data[key]
-        next_new_data = new_data.get(key)
-        if next_new_data is None:
+        next_old_data = old_data.get(key)
+        next_new_data = new_data[key]
+        if next_old_data is None:
+            old_data[key] = next_new_data
             continue
 
         next_new_data_type = type(next_new_data)
         next_old_data_type = type(next_old_data)
 
         if isinstance(next_old_data, dict):
-            change_dict(next_old_data, next_new_data)
+            change_policy_dict(next_old_data, next_new_data, allow_keys)
 
         elif isinstance(next_old_data, list) and isinstance(next_new_data, list):
             old_data[key] = next_new_data
@@ -329,4 +342,20 @@ def change_dict(old_data, new_data):
         elif next_new_data_type == next_old_data_type:
             old_data[key] = next_new_data
 
-    return old_data     # 返回data
+    return old_data  # 返回data
+
+
+# gen_model_policy_keys  递归生成策略的key (解决合法性问题)
+def gen_model_policy_keys(model):
+    if isinstance(model, Model):
+        keys = []
+        for name in model:
+            keys.append(name)
+            keys.extend(gen_model_policy_keys(model[name]))
+
+        return keys
+
+    elif isinstance(model, Nested):
+        return gen_model_policy_keys(model.model)
+    else:
+        return []

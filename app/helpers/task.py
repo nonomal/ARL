@@ -2,7 +2,6 @@ import bson
 import re
 from app import utils
 from app.modules import TaskStatus, TaskTag, TaskType, CeleryAction
-from app import celerytask
 
 logger = utils.get_logger()
 
@@ -34,6 +33,9 @@ def get_ip_domain_list(target):
             raise Exception("{} 包含在禁止域名内".format(item))
 
         elif utils.is_valid_domain(item):
+            if utils.check_domain_black(item):
+                raise Exception("{} 包含在系统黑名单中".format(item))
+
             domain_list.add(item)
 
         elif utils.is_valid_fuzz_domain(item):
@@ -103,6 +105,8 @@ def build_task_data(task_name, task_target, task_type, task_tag, options):
 
 
 def submit_task(task_data):
+    from app import celerytask
+
     target = task_data["target"]
     utils.conn_db('task').insert_one(task_data)
     task_id = str(task_data.pop("_id"))
@@ -116,6 +120,7 @@ def submit_task(task_data):
         TaskType.ASSET_SITE_UPDATE: CeleryAction.ASSET_SITE_UPDATE,
         TaskType.FOFA: CeleryAction.FOFA_TASK,
         TaskType.ASSET_SITE_ADD: CeleryAction.ADD_ASSET_SITE_TASK,
+        TaskType.ASSET_WIH_UPDATE: CeleryAction.ASSET_WIH_UPDATE,
     }
 
     task_type = task_data["type"]

@@ -61,10 +61,21 @@ RUN pip3 install -r requirements.txt
 WORKDIR /opt/ARL-NPoC/
 RUN pip3 install -r requirements.txt
 
-## 安装nuclei
-RUN wget https://github.com/projectdiscovery/nuclei/releases/download/v2.9.4/nuclei_2.9.4_linux_arm64.zip
-RUN unzip nuclei_2.9.4_linux_arm64.zip && mv nuclei /usr/bin/ && rm -f nuclei_2.9.4_linux_arm64.zip
-RUN nuclei
+# 定义nuclei版本
+ARG NUCLEI_VERSION=3.2.4
+
+# 安装nuclei
+RUN wget "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_arm64.zip" \
+    && unzip "nuclei_${NUCLEI_VERSION}_linux_arm64.zip" nuclei \
+    && mv nuclei /usr/bin/ \
+    && rm -f "nuclei_${NUCLEI_VERSION}_linux_arm64.zip"
+
+# 运行nuclei
+RUN nuclei -ut
+
+## 安装 WIH
+RUN wget https://github.com/1c3z/arl_files/raw/master/wih/wih_linux_arm64 -O /usr/bin/wih && chmod +x /usr/bin/wih
+RUN wih --version
 
 ## 切换工作目录
 WORKDIR /code
